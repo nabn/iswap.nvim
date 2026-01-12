@@ -1,9 +1,43 @@
-local ts_utils = require('nvim-treesitter.ts_utils')
-local queries = require('nvim-treesitter.query')
 local util = require('iswap.util')
 local err = util.err
 
-local ft_to_lang = require('nvim-treesitter.parsers').ft_to_lang
+-- Helper function to replace ft_to_lang from nvim-treesitter.parsers
+local function ft_to_lang(ft)
+  return vim.treesitter.language.get_lang(ft) or ft
+end
+
+-- Helper function to replace ts_utils.get_named_children  
+local function get_named_children(node)
+  local children = {}
+  for child, field in node:iter_children() do
+    if child:named() then
+      table.insert(children, child)
+    end
+  end
+  return children
+end
+
+-- Helper function to replace ts_utils.swap_nodes
+-- This function works with ranges (4-element arrays) instead of nodes
+local function swap_ranges(range_a, range_b, bufnr)
+  local a_start_row, a_start_col, a_end_row, a_end_col = unpack(range_a)
+  local b_start_row, b_start_col, b_end_row, b_end_col = unpack(range_b)
+  
+  -- Get text from both ranges
+  local a_text = vim.api.nvim_buf_get_text(bufnr, a_start_row, a_start_col, a_end_row, a_end_col, {})
+  local b_text = vim.api.nvim_buf_get_text(bufnr, b_start_row, b_start_col, b_end_row, b_end_col, {})
+  
+  -- Swap in order (later range first to avoid offset issues)
+  if a_start_row > b_start_row or (a_start_row == b_start_row and a_start_col > b_start_col) then
+    -- A comes after B, so replace A first, then B
+    vim.api.nvim_buf_set_text(bufnr, a_start_row, a_start_col, a_end_row, a_end_col, b_text)
+    vim.api.nvim_buf_set_text(bufnr, b_start_row, b_start_col, b_end_row, b_end_col, a_text)
+  else
+    -- B comes after A, so replace B first, then A
+    vim.api.nvim_buf_set_text(bufnr, b_start_row, b_start_col, b_end_row, b_end_col, a_text)
+    vim.api.nvim_buf_set_text(bufnr, a_start_row, a_start_col, a_end_row, a_end_col, b_text)
+  end
+end
 
 local M = {}
 
@@ -21,10 +55,20 @@ function M.find(winid)
   --       see :h Query:iter_captures()
   local ft = vim.bo[bufnr].filetype
   local root = vim.treesitter.get_parser(bufnr, ft_to_lang(ft)):parse()[1]:root()
-  local q = queries.get_query(ft_to_lang(ft), 'iswap-list')
-  -- TODO: initialize correctly so that :ISwap is not callable on unsupported
-  -- languages, if that's possible.
-  if not q then
+  -- Try different APIs for compatibility
+  local ok, q = pcall(vim.treesitter.query.get, ft_to_lang(ft), 'iswap-list')
+  
+  -- If that fails, try parsing from file  
+  if not ok or not q then
+    local lang = ft_to_lang(ft)
+    local query_path = vim.api.nvim_get_runtime_file('queries/' .. lang .. '/iswap-list.scm', false)[1]
+    if query_path then
+      local content = table.concat(vim.fn.readfile(query_path), '\n')
+      ok, q = pcall(vim.treesitter.query.parse, lang, content)
+    end
+  end
+  
+  if not ok or not q then
     err('Cannot query this filetype', true)
     return
   end
@@ -51,7 +95,7 @@ function M.get_list_node_at_cursor(winid, config, needs_cursor_node)
     local start = { start_row, start_col }
     local end_ = { end_row, end_col }
     if util.within(start, cursor_range, end_) and node:named_child_count() > 1 then
-      local children = ts_utils.get_named_children(node)
+      local children = get_named_children(node)
       if needs_cursor_node then
         local cur_nodes = util.nodes_containing_cursor(children, winid)
         if #cur_nodes >= 1 then
@@ -121,7 +165,7 @@ function M.swap_ranges_and_return_new_ranges(a, b, bufnr, should_move_cursor)
   local text1 = node_or_range_get_text(a, bufnr)
   local text2 = node_or_range_get_text(b, bufnr)
 
-  ts_utils.swap_nodes(a, b, bufnr)
+  swap_ranges(a, b, bufnr)
 
   local char_delta = 0
   local line_delta = 0

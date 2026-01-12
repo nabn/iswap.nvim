@@ -1,4 +1,3 @@
-local ts_utils = require('nvim-treesitter.ts_utils')
 local util = require('iswap.util')
 local err = util.err
 
@@ -42,7 +41,9 @@ function M.prompt(bufnr, config, nodes, active_range, times)
   for i, node in ipairs(nodes) do
     local key = keys:sub(i, i)
     imap[key] = i
-    ts_utils.highlight_node(node, bufnr, M.iswap_ns, config.hl_selection)
+    -- Highlight node manually since ts_utils.highlight_node is deprecated
+    local start_row, start_col, end_row, end_col = node:range()
+    vim.highlight.range(bufnr, M.iswap_ns, config.hl_selection, {start_row, start_col}, {end_row, end_col}, 'v', false)
     local start_row, start_col = node:range()
     vim.api.nvim_buf_set_extmark(bufnr, M.iswap_ns, start_row, start_col,
       { virt_text = { { key, config.hl_snipe } }, virt_text_pos = "overlay", hl_mode = "blend" })
